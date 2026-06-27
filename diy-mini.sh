@@ -128,6 +128,3 @@ if [ -d "feeds/luci/applications/luci-app-zerotier" ]; then
   sed -i 's/vpn/services/g' feeds/luci/applications/luci-app-zerotier/luasrc/view/zerotier/zerotier_status.htm
 fi
 
-# 6. 再次运行 feeds install 以确保所有新添加的包都被识别
-./scripts/feeds update -a
-./scripts/feeds install -a
