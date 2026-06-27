@@ -73,7 +73,6 @@ jobs:
         mixkey: ${{ env.REPO_URL }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
         prefix: ${{ env.OPENWRT_PATH }}
 
-    # ✅ 关键修复：先更新 Feeds，再执行 DIY，最后 Install Feeds
     - name: 📥 更新 Feeds
       run: |
         cd $OPENWRT_PATH
@@ -81,18 +80,12 @@ jobs:
 
     - name: 🛠️ 加载自定义配置 (DIY)
       run: |
-        # 移动自定义文件
         [ -e files ] && mv files $OPENWRT_PATH/files
-        
-        # ✅ 关键修复：确保在 OPENWRT_PATH 下执行 DIY，并增加容错
         cd $OPENWRT_PATH
         if [ -e $GITHUB_WORKSPACE/$DIY_SCRIPT ]; then
           chmod +x $GITHUB_WORKSPACE/$DIY_SCRIPT
-          # 使用 bash -e 可以在出错时立即停止，便于定位
-          bash $GITHUB_WORKSPACE/$DIY_SCRIPT || echo "⚠️ DIY脚本部分命令执行失败，请检查上方日志"
+          bash $GITHUB_WORKSPACE/$DIY_SCRIPT || echo "⚠️ DIY脚本部分命令执行失败"
         fi
-        
-        # 预设脚本同样增加路径检查
         [ -e $GITHUB_WORKSPACE/scripts/preset-clash-core.sh ] && bash $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
         [ -e $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh ] && bash $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
 
@@ -125,9 +118,17 @@ jobs:
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
         cp $OPENWRT_PATH/.config build.config
+        
+        # 打包 ipk 库
         mkdir -p packages && cp -r $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ 2>/dev/null || true
         tar -zcf Packages.tar.gz packages --remove-files 2>/dev/null || true
+        
+        # 清理不需要的文件
         rm -rf feeds.buildinfo version.buildinfo packages
+        
+        # ✅ 关键修复：删除所有子目录（如 u-boot-qemu_armv7），防止 Release 上传目录报错
+        find . -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+        
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
     - name: 📤 上传 Rootfs
@@ -145,6 +146,7 @@ jobs:
         tag: ${{ env.FIRMWARE_TAG }}
         token: ${{ secrets.GITHUB_TOKEN }}
         allowUpdates: true
+        # 因为上面已经删除了子目录，这里用 * 只会匹配到文件，不会再报错
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
           **ARMv8 Mini Firmware (Temporary)**
