@@ -62,6 +62,8 @@ jobs:
         sudo -E apt-get -y autoremove --purge
         sudo -E apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
+        sudo apt-get update
+        sudo apt-get install libfuse-dev
 
     - name: Clone Source Code
       id: clone
