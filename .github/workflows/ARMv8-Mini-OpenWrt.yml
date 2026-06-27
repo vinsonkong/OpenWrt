@@ -3,7 +3,6 @@ name: ARMv8 Mini OpenWrt
 on:
   workflow_dispatch:
 
-# 解决 403 错误的关键：明确声明工作流权限
 permissions:
   contents: write
   packages: read
@@ -33,7 +32,7 @@ jobs:
       DATE: ${{ steps.compile.outputs.DATE }}
 
     steps:
-    - name: 🛒 检出代码 (Checkout)
+    - name: 🛒 检出代码
       uses: actions/checkout@v4
 
     - name: 🛠️ 初始化环境
@@ -42,8 +41,7 @@ jobs:
         sudo apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
         sudo apt-get -y update
         sudo apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204) libfuse-dev
-        sudo apt-get -y autoremove --purge
-        sudo apt-get -y clean
+        sudo apt-get -y autoremove --purge && sudo apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
 
     - name: 📦 克隆源码
@@ -52,38 +50,20 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        
-        # 使用 Heredoc 语法防止多行 Commit Message 破坏 YAML 解析
-        echo "COMMIT_AUTHOR<<EOF" >> $GITHUB_OUTPUT
-        git show -s --date=short --format="作者: %an" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        
-        echo "COMMIT_DATE<<EOF" >> $GITHUB_OUTPUT
-        git show -s --date=short --format="时间: %ci" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        
-        echo "COMMIT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
-        git show -s --date=short --format="内容: %s" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        
-        echo "COMMIT_HASH<<EOF" >> $GITHUB_OUTPUT
-        git show -s --date=short --format="hash: %H" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        echo "COMMIT_AUTHOR<<EOF" >> $GITHUB_OUTPUT && git show -s --date=short --format="作者: %an" >> $GITHUB_OUTPUT && echo "EOF" >> $GITHUB_OUTPUT
+        echo "COMMIT_DATE<<EOF" >> $GITHUB_OUTPUT && git show -s --date=short --format="时间: %ci" >> $GITHUB_OUTPUT && echo "EOF" >> $GITHUB_OUTPUT
+        echo "COMMIT_MESSAGE<<EOF" >> $GITHUB_OUTPUT && git show -s --date=short --format="内容: %s" >> $GITHUB_OUTPUT && echo "EOF" >> $GITHUB_OUTPUT
+        echo "COMMIT_HASH<<EOF" >> $GITHUB_OUTPUT && git show -s --date=short --format="hash: %H" >> $GITHUB_OUTPUT && echo "EOF" >> $GITHUB_OUTPUT
 
     - name: ⚙️ 配置编译变量
       id: variable
       run: |
         cp $CONFIG_FILE $OPENWRT_PATH/.config
-        cd $OPENWRT_PATH
-        make defconfig > /dev/null 2>&1
-        
+        cd $OPENWRT_PATH && make defconfig > /dev/null 2>&1
         DEVICE_TARGET=$(grep CONFIG_TARGET_BOARD .config | awk -F '"' '{print $2}')
         DEVICE_SUBTARGET=$(grep CONFIG_TARGET_SUBTARGET .config | awk -F '"' '{print $2}')
-        
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
-        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
-        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV && echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV && echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
 
     - name: 🗃️ 缓存工具链
       if: env.CACHE_TOOLCHAIN == 'true'
@@ -93,19 +73,33 @@ jobs:
         mixkey: ${{ env.REPO_URL }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
         prefix: ${{ env.OPENWRT_PATH }}
 
-    - name: 📥 安装 Feeds
+    # ✅ 关键修复：先更新 Feeds，再执行 DIY，最后 Install Feeds
+    - name: 📥 更新 Feeds
       run: |
         cd $OPENWRT_PATH
         ./scripts/feeds update -a
-        ./scripts/feeds install -a
 
-    - name: 🛠️ 加载自定义配置
+    - name: 🛠️ 加载自定义配置 (DIY)
       run: |
+        # 移动自定义文件
         [ -e files ] && mv files $OPENWRT_PATH/files
-        [ -e $DIY_SCRIPT ] && chmod +x $DIY_SCRIPT && ./$DIY_SCRIPT
+        
+        # ✅ 关键修复：确保在 OPENWRT_PATH 下执行 DIY，并增加容错
         cd $OPENWRT_PATH
-        [ -e $GITHUB_WORKSPACE/scripts/preset-clash-core.sh ] && chmod +x $GITHUB_WORKSPACE/scripts/preset-clash-core.sh && $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
-        [ -e $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh ] && chmod +x $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh && $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
+        if [ -e $GITHUB_WORKSPACE/$DIY_SCRIPT ]; then
+          chmod +x $GITHUB_WORKSPACE/$DIY_SCRIPT
+          # 使用 bash -e 可以在出错时立即停止，便于定位
+          bash $GITHUB_WORKSPACE/$DIY_SCRIPT || echo "⚠️ DIY脚本部分命令执行失败，请检查上方日志"
+        fi
+        
+        # 预设脚本同样增加路径检查
+        [ -e $GITHUB_WORKSPACE/scripts/preset-clash-core.sh ] && bash $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
+        [ -e $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh ] && bash $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
+
+    - name: 📥 安装 Feeds
+      run: |
+        cd $OPENWRT_PATH
+        ./scripts/feeds install -a
 
     - name: 📥 下载源码包
       run: |
@@ -121,9 +115,7 @@ jobs:
         mkdir -p files/etc/uci-defaults
         echo -e "#!/bin/sh\nuci set system.@system[0].hostname='OpenWrt-Mini'\nuci commit system" > files/etc/uci-defaults/99-init-settings
         chmod +x files/etc/uci-defaults/99-init-settings
-        
         make -j$(nproc) || make -j1 V=s
-        
         echo "status=success" >> $GITHUB_OUTPUT
         echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_OUTPUT
         echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_OUTPUT
@@ -138,7 +130,7 @@ jobs:
         rm -rf feeds.buildinfo version.buildinfo packages
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
-    - name: 📤 上传 Rootfs (Artifact 传递)
+    - name: 📤 上传 Rootfs
       if: steps.compile.outputs.status == 'success'
       uses: actions/upload-artifact@v4
       with:
@@ -156,13 +148,10 @@ jobs:
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
           **ARMv8 Mini Firmware (Temporary)**
-          ### 📒 固件信息
-          - 💻 平台架构: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
-          - ⚽ 固件源码: ${{ env.REPO_URL }}
-          - 💝 源码分支: ${{ env.REPO_BRANCH }}
-          - 🌐 默认地址: 192.168.1.1
-          - 🔑 默认密码: password
-          ### 🧊 固件版本
+          - 💻 平台: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+          - ⚽ 源码: ${{ env.REPO_URL }} (${{ env.REPO_BRANCH }})
+          - 🌐 IP: 192.168.1.1 | 🔑 密码: password
+          ### 🧊 版本信息
           ${{ steps.clone.outputs.COMMIT_AUTHOR }}
           ${{ steps.clone.outputs.COMMIT_DATE }}
           ${{ steps.clone.outputs.COMMIT_MESSAGE }}
@@ -172,16 +161,16 @@ jobs:
     needs: Build
     runs-on: ubuntu-22.04
     steps:
-    - name: 🛒 检出代码 (Checkout)
+    - name: 🛒 检出代码
       uses: actions/checkout@v4
 
-    - name: 📥 下载 Rootfs (Artifact 传递)
+    - name: 📥 下载 Rootfs
       uses: actions/download-artifact@v4
       with:
         name: openwrt-rootfs
         path: openwrt/bin/targets/armvirt/64
 
-    - name: 📦 打包 OpenWrt 固件
+    - name: 📦 打包 OpenWrt
       uses: ophub/flippy-openwrt-actions@main
       env:
         OPENWRT_ARMVIRT: openwrt/bin/targets/armvirt/64/*rootfs.tar.gz
@@ -201,20 +190,13 @@ jobs:
         removeArtifacts: true
         artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
         body: |
-          **OpenWrt Firmware for Armvirt 64 (Enhanced)**
-          ### 📒 固件信息
-          - 🚀 ARMv8 精简版，主打科学上网适合养老
-          - 💻 平台架构: ${{ needs.Build.outputs.DEVICE_TARGET }}-${{ needs.Build.outputs.DEVICE_SUBTARGET }}
-          - ⚽ 固件源码: ${{ env.REPO_URL }}
-          - 💝 源码分支: ${{ env.REPO_BRANCH }}
-          - 🌐 默认地址: 192.168.1.1
-          - 🔑 默认密码: password
-          ### 🍻 安装与更新
-          - 用插件安装: 系统 → 晶晨宝盒 → 安装 OpenWrt → 选择型号 → 安装
-          - 用命令安装: U盘启动成功后输入命令 `openwrt-install-amlogic` 按照英文提示写入到 emmc
-          - 用插件更新: 系统 → 晶晨宝盒 → 在线下载更新 → 完整更新全系统
-          - 用命令更新: 上传固件到 `/mnt/mmcblk2p4` 目录，输入命令 `openwrt-update-amlogic` 即可更新
-          ### 🧊 固件版本
+          **OpenWrt ARMv8 Enhanced**
+          - 💻 平台: ${{ needs.Build.outputs.DEVICE_TARGET }}-${{ needs.Build.outputs.DEVICE_SUBTARGET }}
+          - 🌐 IP: 192.168.1.1 | 🔑 密码: password
+          ### 🍻 安装更新
+          - 插件: 晶晨宝盒 → 安装/更新 OpenWrt
+          - 命令: `openwrt-install-amlogic` / `openwrt-update-amlogic`
+          ### 🧊 版本信息
           ${{ needs.Build.outputs.COMMIT_AUTHOR }}
           ${{ needs.Build.outputs.COMMIT_DATE }}
           ${{ needs.Build.outputs.COMMIT_MESSAGE }}
