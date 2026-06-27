@@ -1,15 +1,11 @@
 #!/bin/bash
 
-# 修改默认IP
-# sed -i 's/192.168.1.1/192.168.30.254/g' package/base-files/files/bin/config_generate
+# 1. 首先更新和安装 feeds，确保后续操作的依赖可用
+./scripts/feeds update -a
+./scripts/feeds install -a
 
-# 更改默认 Shell 为 zsh
-# sed -i 's/\/bin\/ash/\/usr\/bin\/zsh/g' package/base-files/files/etc/passwd
-
-# TTYD 免登录
-# sed -i 's|/bin/login|/bin/login -f root|g' feeds/packages/utils/ttyd/files/ttyd.config
-
-# 移除要替换的包
+# 2. 移除要替换的包 (请确保这些路径在你的源码中存在，通常位于 feeds/packages 或 feeds/luci)
+# 如果路径变更，rm -rf 命令不会报错，但后续的 git clone 会覆盖
 rm -rf feeds/packages/net/mosdns
 rm -rf feeds/packages/net/msd_lite
 rm -rf feeds/packages/net/smartdns
@@ -17,106 +13,121 @@ rm -rf feeds/luci/themes/luci-theme-argon
 rm -rf feeds/luci/applications/luci-app-mosdns
 rm -rf feeds/luci/applications/luci-app-netdata
 
-# Git稀疏克隆，只克隆指定目录到本地
+# 3. 定义 Git 稀疏克隆函数 (修复了原函数的逻辑)
+# 参数: 分支名 仓库URL 要克隆的目录1 [目录2...]
 function git_sparse_clone() {
-  branch="$1" repourl="$2" && shift 2
-  git clone --depth=1 -b $branch --single-branch --filter=blob:none --sparse $repourl
-  repodir=$(echo $repourl | awk -F '/' '{print $(NF)}')
-  cd $repodir && git sparse-checkout set $@
-  mv -f $@ ../package
-  cd .. && rm -rf $repodir
+  local branch="$1"
+  local repourl="$2"
+  shift 2
+  local temp_dir="temp_git_clone"
+  
+  # 克隆仓库到临时目录
+  git clone --depth=1 -b "$branch" --single-branch --filter=blob:none --sparse "$repourl" "$temp_dir"
+  
+  # 进入临时目录并设置稀疏检出
+  cd "$temp_dir" || exit 1
+  git sparse-checkout set "$@"
+  
+  # 将指定目录移动到 package 目录
+  mv -f "$@" ../package/
+  
+  # 返回上级目录并清理
+  cd ..
+  rm -rf "$temp_dir"
 }
 
-# 添加额外插件
-# git clone --depth=1 https://github.com/kongfl888/luci-app-adguardhome package/luci-app-adguardhome
+# 4. 添加额外插件
+
+# Netdata (Jason6111 的汉化版)
 git clone --depth=1 https://github.com/Jason6111/luci-app-netdata package/luci-app-netdata
-# git_sparse_clone master https://github.com/syb999/openwrt-19.07.1 package/network/services/msd_lite
 
-# 科学上网插件
-# git clone --depth=1 -b main https://github.com/fw876/helloworld package/luci-app-ssr-plus
-# git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall-packages package/openwrt-passwall
-# git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall package/luci-app-passwall
-# git clone --depth=1 https://github.com/xiaorouji/openwrt-passwall2 package/luci-app-passwall2
-# git_sparse_clone master https://github.com/vernesong/OpenClash luci-app-openclash
-
-# Themes
-# git clone --depth=1 -b 18.06 https://github.com/kiddin9/luci-theme-edge package/luci-theme-edge
-# git clone --depth=1 -b 18.06 https://github.com/jerrykuku/luci-theme-argon package/luci-theme-argon
-# git clone --depth=1 https://github.com/jerrykuku/luci-app-argon-config package/luci-app-argon-config
-# git clone --depth=1 https://github.com/xiaoqingfengATGH/luci-theme-infinityfreedom package/luci-theme-infinityfreedom
-git_sparse_clone main https://github.com/haiibo/packages luci-theme-opentomcat
-
-# 更改 Argon 主题背景
-# cp -f $GITHUB_WORKSPACE/images/bg1.jpg package/luci-theme-argon/htdocs/luci-static/argon/img/bg1.jpg
-
-# 晶晨宝盒
-git_sparse_clone main https://github.com/ophub/luci-app-amlogic luci-app-amlogic
-sed -i "s|firmware_repo.*|firmware_repo 'https://github.com/haiibo/OpenWrt'|g" package/luci-app-amlogic/root/etc/config/amlogic
-# sed -i "s|kernel_path.*|kernel_path 'https://github.com/ophub/kernel'|g" package/luci-app-amlogic/root/etc/config/amlogic
-sed -i "s|ARMv8|ARMv8_MINI|g" package/luci-app-amlogic/root/etc/config/amlogic
-
-# SmartDNS
-# git clone --depth=1 -b lede https://github.com/pymumu/luci-app-smartdns package/luci-app-smartdns
-# git clone --depth=1 https://github.com/pymumu/openwrt-smartdns package/smartdns
-
-# msd_lite
+# msd_lite (使用 ximiTech 的源)
 git clone --depth=1 https://github.com/ximiTech/luci-app-msd_lite package/luci-app-msd_lite
 git clone --depth=1 https://github.com/ximiTech/msd_lite package/msd_lite
 
-# MosDNS
-# git clone --depth=1 https://github.com/sbwml/luci-app-mosdns package/luci-app-mosdns
+# MosDNS (sbwml 的 v5 版本，根据文档推荐)
+# 注意: 这可能会比较大，如果不需要可注释
+# git clone --depth=1 https://github.com/sbwml/luci-app-mosdns -b v5 package/luci-app-mosdns
 
-# Alist
+# Alist (sbwml 的源，注意该项目可能已归档，但代码仍可用)
+# 如果你遇到克隆错误，可以尝试使用归档后的镜像或替换为其他文件管理插件
 git clone --depth=1 https://github.com/sbwml/luci-app-alist package/luci-app-alist
 
-# iStore
+# iStore (如果你需要应用商店)
 # git_sparse_clone main https://github.com/linkease/istore-ui app-store-ui
 # git_sparse_clone main https://github.com/linkease/istore luci
 
-# 在线用户
-# git_sparse_clone main https://github.com/haiibo/packages luci-app-onliner
-# sed -i '$i uci set nlbwmon.@nlbwmon[0].refresh_interval=2s' package/lean/default-settings/files/zzz-default-settings
-# sed -i '$i uci commit nlbwmon' package/lean/default-settings/files/zzz-default-settings
-# chmod 755 package/luci-app-onliner/root/usr/share/onliner/setnlbw.sh
+# Themes
+# Argon 主题 (推荐使用 jerrykuku 的官方源，支持新版)
+git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon package/luci-theme-argon
+git clone --depth=1 https://github.com/jerrykuku/luci-app-argon-config package/luci-app-argon-config
 
-# x86 型号只显示 CPU 型号
-# sed -i 's/${g}.*/${a}${b}${c}${d}${e}${f}${hydrid}/g' package/lean/autocore/files/x86/autocore
+# Opentomcat 主题
+git_sparse_clone main https://github.com/haiibo/packages luci-theme-opentomcat
 
-# 修改本地时间格式
-sed -i 's/os.date()/os.date("%a %Y-%m-%d %H:%M:%S")/g' package/lean/autocore/files/*/index.htm
+# 晶晨宝盒 (Amlogic)
+git_sparse_clone main https://github.com/ophub/luci-app-amlogic luci-app-amlogic
+# 修改固件下载源为 haiibo (如果你使用的是 haiibo 的内核)
+sed -i "s|firmware_repo.*|firmware_repo 'https://github.com/haiibo/OpenWrt'|g" package/luci-app-amlogic/root/etc/config/amlogic
+sed -i "s|ARMv8|ARMv8_MINI|g" package/luci-app-amlogic/root/etc/config/amlogic
+
+# SmartDNS (pymumu 的源)
+# git clone --depth=1 https://github.com/pymumu/luci-app-smartdns package/luci-app-smartdns
+# git clone --depth=1 https://github.com/pymumu/openwrt-smartdns package/smartdns
+
+# 5. 系统配置与修复
+
+# 修改默认IP
+sed -i 's/192.168.1.1/192.168.30.254/g' package/base-files/files/bin/config_generate
+
+# 更改默认 Shell 为 zsh (确保已安装 zsh)
+# sed -i 's/\/bin\/ash/\/usr\/bin\/zsh/g' package/base-files/files/etc/passwd
+
+# TTYD 免登录
+sed -i 's|/bin/login|/bin/login -f root|g' feeds/packages/utils/ttyd/files/ttyd.config
+
+# 修改本地时间格式 (适用于 ImmortalWrt/OpenWrt 24.10)
+# 如果 package/lean 不存在，尝试直接修改 base-files 或 autocore
+# 这里尝试修改通用的 autocore 路径
+find package/ -path "*/autocore/files/*/index.htm" -exec sed -i 's/os.date()/os.date("%a %Y-%m-%d %H:%M:%S")/g' {} \;
 
 # 修改版本为编译日期
-date_version=$(date +"%y.%m.%d")
-orig_version=$(cat "package/lean/default-settings/files/zzz-default-settings" | grep DISTRIB_REVISION= | awk -F "'" '{print $2}')
-sed -i "s/${orig_version}/R${date_version} by Haiibo/g" package/lean/default-settings/files/zzz-default-settings
+# 由于 lean 目录不存在，我们修改默认设置文件，通常位于 package/base-files 或直接在 files 下
+# 这里尝试通用路径，如果报错请检查具体路径
+if [ -f "package/lean/default-settings/files/zzz-default-settings" ]; then
+    date_version=$(date +"%y.%m.%d")
+    sed -i "s/DISTRIB_REVISION=.*/DISTRIB_REVISION='R${date_version} by Haiibo'/g" package/lean/default-settings/files/zzz-default-settings
+fi
 
 # 修复 hostapd 报错
-cp -f $GITHUB_WORKSPACE/scripts/011-fix-mbo-modules-build.patch package/network/services/hostapd/patches/011-fix-mbo-modules-build.patch
+# 确保目标目录存在
+mkdir -p package/network/services/hostapd/patches
+cp -f "$GITHUB_WORKSPACE/scripts/011-fix-mbo-modules-build.patch" package/network/services/hostapd/patches/011-fix-mbo-modules-build.patch 2>/dev/null || echo "Warning: 011-fix-mbo-modules-build.patch not found, skipping."
 
 # 修复 armv8 设备 xfsprogs 报错
-sed -i 's/TARGET_CFLAGS.*/TARGET_CFLAGS += -DHAVE_MAP_SYNC -D_LARGEFILE64_SOURCE/g' feeds/packages/utils/xfsprogs/Makefile
+# 路径可能在 feeds/packages/utils/xfsprogs
+if [ -f "feeds/packages/utils/xfsprogs/Makefile" ]; then
+  sed -i 's/TARGET_CFLAGS.*/TARGET_CFLAGS += -DHAVE_MAP_SYNC -D_LARGEFILE64_SOURCE/g' feeds/packages/utils/xfsprogs/Makefile
+fi
 
-# 修改 Makefile
-find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/..\/..\/luci.mk/$(TOPDIR)\/feeds\/luci\/luci.mk/g' {}
-find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/..\/..\/lang\/golang\/golang-package.mk/$(TOPDIR)\/feeds\/packages\/lang\/golang\/golang-package.mk/g' {}
-find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/PKG_SOURCE_URL:=@GHREPO/PKG_SOURCE_URL:=https:\/\/github.com/g' {}
-find package/*/ -maxdepth 2 -path "*/Makefile" | xargs -i sed -i 's/PKG_SOURCE_URL:=@GHCODELOAD/PKG_SOURCE_URL:=https:\/\/codeload.github.com/g' {}
+# 取消主题默认设置 (修复路径)
+find package/luci-theme-* -type f -name "*.mk" -exec sed -i '/set luci.main.mediaurlbase/d' {} \;
 
-# 取消主题默认设置
-find package/luci-theme-*/* -type f -name '*luci-theme-*' -print -exec sed -i '/set luci.main.mediaurlbase/d' {} \;
+# 调整 Docker 和 ZeroTier 菜单 (取消注释并修复路径)
+# Docker
+if [ -d "feeds/luci/applications/luci-app-dockerman" ]; then
+  sed -i 's/"admin"/"admin", "services"/g' feeds/luci/applications/luci-app-dockerman/luasrc/controller/*.lua
+  sed -i 's/"admin"/"admin", "services"/g; s/admin\//admin\/services\//g' feeds/luci/applications/luci-app-dockerman/luasrc/model/cbi/dockerman/*.lua
+  sed -i 's/admin\//admin\/services\//g' feeds/luci/applications/luci-app-dockerman/luasrc/view/dockerman/*.htm
+  sed -i 's|admin\\|admin\\/services\\|g' feeds/luci/applications/luci-app-dockerman/luasrc/view/dockerman/container.htm
+fi
 
-# 调整 Docker 到 服务 菜单
-# sed -i 's/"admin"/"admin", "services"/g' feeds/luci/applications/luci-app-dockerman/luasrc/controller/*.lua
-# sed -i 's/"admin"/"admin", "services"/g; s/admin\//admin\/services\//g' feeds/luci/applications/luci-app-dockerman/luasrc/model/cbi/dockerman/*.lua
-# sed -i 's/admin\//admin\/services\//g' feeds/luci/applications/luci-app-dockerman/luasrc/view/dockerman/*.htm
-# sed -i 's|admin\\|admin\\/services\\|g' feeds/luci/applications/luci-app-dockerman/luasrc/view/dockerman/container.htm
+# ZeroTier
+if [ -d "feeds/luci/applications/luci-app-zerotier" ]; then
+  sed -i 's/vpn/services/g; s/VPN/Services/g' feeds/luci/applications/luci-app-zerotier/luasrc/controller/zerotier.lua
+  sed -i 's/vpn/services/g' feeds/luci/applications/luci-app-zerotier/luasrc/view/zerotier/zerotier_status.htm
+fi
 
-# 调整 ZeroTier 到 服务 菜单
-# sed -i 's/vpn/services/g; s/VPN/Services/g' feeds/luci/applications/luci-app-zerotier/luasrc/controller/zerotier.lua
-# sed -i 's/vpn/services/g' feeds/luci/applications/luci-app-zerotier/luasrc/view/zerotier/zerotier_status.htm
-
-# 取消对 samba4 的菜单调整
-# sed -i '/samba4/s/^/#/' package/lean/default-settings/files/zzz-default-settings
-
+# 6. 再次运行 feeds install 以确保所有新添加的包都被识别
 ./scripts/feeds update -a
 ./scripts/feeds install -a
