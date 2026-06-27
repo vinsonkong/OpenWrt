@@ -3,7 +3,7 @@ name: ARMv8 Mini OpenWrt
 on:
   workflow_dispatch:
 
-# 👇 解决 403 错误的关键：明确声明权限
+# 解决 403 错误的关键：明确声明工作流权限
 permissions:
   contents: write
   packages: read
@@ -15,10 +15,7 @@ env:
   DIY_SCRIPT: diy-mini.sh
   CLASH_KERNEL: arm64
   CACHE_TOOLCHAIN: true
-  UPLOAD_BIN_DIR: false
-  FIRMWARE_RELEASE: true
   FIRMWARE_TAG: ROOTFS_MINI
-  OPENWRT_RELEASE: true
   OPENWRT_TAG: ARMv8_MINI
   TZ: Asia/Shanghai
 
@@ -32,11 +29,15 @@ jobs:
       COMMIT_HASH: ${{ steps.clone.outputs.COMMIT_HASH }}
       DEVICE_TARGET: ${{ steps.variable.outputs.DEVICE_TARGET }}
       DEVICE_SUBTARGET: ${{ steps.variable.outputs.DEVICE_SUBTARGET }}
+      FILE_DATE: ${{ steps.compile.outputs.FILE_DATE }}
+      DATE: ${{ steps.compile.outputs.DATE }}
 
     steps:
+    - name: 🛒 检出代码 (Checkout)
+      uses: actions/checkout@v4
+
     - name: 🛠️ 初始化环境
       run: |
-        # 精简系统清理与依赖安装
         sudo rm -rf /usr/share/dotnet /etc/apt/sources.list.d /usr/local/lib/android $AGENT_TOOLSDIRECTORY
         sudo apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
         sudo apt-get -y update
@@ -44,12 +45,6 @@ jobs:
         sudo apt-get -y autoremove --purge
         sudo apt-get -y clean
         sudo timedatectl set-timezone "$TZ"
-        
-        # 检查硬件信息
-        echo "-------------------------- CPU/MEM Info --------------------------"
-        echo "CPU: $(nproc) Cores $(cat /proc/cpuinfo | grep -m1 'name' | awk -F: '{print $2}')"
-        echo "MEM: $(sudo lshw -short -C memory | grep GiB | head -1)"
-        df -hT
 
     - name: 📦 克隆源码
       id: clone
@@ -57,15 +52,23 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        # 提取最后一次提交信息
-        COMMIT_AUTHOR=$(git show -s --date=short --format="作者: %an")
-        COMMIT_DATE=$(git show -s --date=short --format="时间: %ci")
-        COMMIT_MESSAGE=$(git show -s --date=short --format="内容: %s")
-        COMMIT_HASH=$(git show -s --date=short --format="hash: %H")
-        echo "COMMIT_AUTHOR=$COMMIT_AUTHOR" >> $GITHUB_ENV
-        echo "COMMIT_DATE=$COMMIT_DATE" >> $GITHUB_ENV
-        echo "COMMIT_MESSAGE=$COMMIT_MESSAGE" >> $GITHUB_ENV
-        echo "COMMIT_HASH=$COMMIT_HASH" >> $GITHUB_ENV
+        
+        # 使用 Heredoc 语法防止多行 Commit Message 破坏 YAML 解析
+        echo "COMMIT_AUTHOR<<EOF" >> $GITHUB_OUTPUT
+        git show -s --date=short --format="作者: %an" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        
+        echo "COMMIT_DATE<<EOF" >> $GITHUB_OUTPUT
+        git show -s --date=short --format="时间: %ci" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        
+        echo "COMMIT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
+        git show -s --date=short --format="内容: %s" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        
+        echo "COMMIT_HASH<<EOF" >> $GITHUB_OUTPUT
+        git show -s --date=short --format="hash: %H" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
 
     - name: ⚙️ 配置编译变量
       id: variable
@@ -73,19 +76,21 @@ jobs:
         cp $CONFIG_FILE $OPENWRT_PATH/.config
         cd $OPENWRT_PATH
         make defconfig > /dev/null 2>&1
-        SOURCE_REPO="$(echo $REPO_URL | awk -F '/' '{print $(NF)}')"
-        DEVICE_TARGET=$(grep CONFIG_TARGET_BOARD $OPENWRT_PATH/.config | awk -F '"' '{print $2}')
-        DEVICE_SUBTARGET=$(grep CONFIG_TARGET_SUBTARGET $OPENWRT_PATH/.config | awk -F '"' '{print $2}')
-        echo "SOURCE_REPO=$SOURCE_REPO" >> $GITHUB_ENV
+        
+        DEVICE_TARGET=$(grep CONFIG_TARGET_BOARD .config | awk -F '"' '{print $2}')
+        DEVICE_SUBTARGET=$(grep CONFIG_TARGET_SUBTARGET .config | awk -F '"' '{print $2}')
+        
         echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_ENV
         echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_ENV
+        echo "DEVICE_TARGET=$DEVICE_TARGET" >> $GITHUB_OUTPUT
+        echo "DEVICE_SUBTARGET=$DEVICE_SUBTARGET" >> $GITHUB_OUTPUT
 
     - name: 🗃️ 缓存工具链
       if: env.CACHE_TOOLCHAIN == 'true'
       uses: HiGarfield/cachewrtbuild@main
       with:
         ccache: false
-        mixkey: ${{ env.SOURCE_REPO }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+        mixkey: ${{ env.REPO_URL }}-${{ env.REPO_BRANCH }}-${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
         prefix: ${{ env.OPENWRT_PATH }}
 
     - name: 📥 安装 Feeds
@@ -99,16 +104,14 @@ jobs:
         [ -e files ] && mv files $OPENWRT_PATH/files
         [ -e $DIY_SCRIPT ] && chmod +x $DIY_SCRIPT && ./$DIY_SCRIPT
         cd $OPENWRT_PATH
-        # 假设 preset scripts 在仓库根目录或指定路径
-        [ -e $GITHUB_WORKSPACE/scripts/preset-clash-core.sh ] && $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
-        [ -e $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh ] && $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
+        [ -e $GITHUB_WORKSPACE/scripts/preset-clash-core.sh ] && chmod +x $GITHUB_WORKSPACE/scripts/preset-clash-core.sh && $GITHUB_WORKSPACE/scripts/preset-clash-core.sh $CLASH_KERNEL
+        [ -e $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh ] && chmod +x $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh && $GITHUB_WORKSPACE/scripts/preset-terminal-tools.sh
 
     - name: 📥 下载源码包
       run: |
         cd $OPENWRT_PATH
         make defconfig
         make download -j8
-        # 清理下载失败的小文件
         find dl -size -1024c -exec rm -f {} \;
 
     - name: 🏗️ 编译固件
@@ -116,96 +119,82 @@ jobs:
       run: |
         cd $OPENWRT_PATH
         mkdir -p files/etc/uci-defaults
-        # 添加初始化脚本
-        echo '#!/bin/sh' > files/etc/uci-defaults/99-init-settings
-        echo "uci set system.@system[0].hostname='OpenWrt-Mini'" >> files/etc/uci-defaults/99-init-settings
+        echo -e "#!/bin/sh\nuci set system.@system[0].hostname='OpenWrt-Mini'\nuci commit system" > files/etc/uci-defaults/99-init-settings
         chmod +x files/etc/uci-defaults/99-init-settings
         
-        # 开始编译
         make -j$(nproc) || make -j1 V=s
+        
         echo "status=success" >> $GITHUB_OUTPUT
-        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_ENV
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_OUTPUT
+        echo "FILE_DATE=$(date +"%Y.%m.%d")" >> $GITHUB_OUTPUT
 
     - name: 📂 整理文件
       if: steps.compile.outputs.status == 'success'
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
-        cat sha256sums 2>/dev/null || echo "No sha256sums"
         cp $OPENWRT_PATH/.config build.config
-        # 打包 ipk 库
-        mkdir -p packages && cp -r $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ 2>/dev/null
-        tar -zcf Packages.tar.gz packages --remove-files
-        rm -rf feeds.buildinfo version.buildinfo
+        mkdir -p packages && cp -r $OPENWRT_PATH/bin/packages/*/*/*.ipk packages/ 2>/dev/null || true
+        tar -zcf Packages.tar.gz packages --remove-files 2>/dev/null || true
+        rm -rf feeds.buildinfo version.buildinfo packages
         echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
 
-    - name: 🚀 发布固件
-      if: steps.compile.outputs.status == 'success' && env.FIRMWARE_RELEASE == 'true'
+    - name: 📤 上传 Rootfs (Artifact 传递)
+      if: steps.compile.outputs.status == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: openwrt-rootfs
+        path: ${{ env.FIRMWARE_PATH }}/*rootfs.tar.gz
+
+    - name: 🚀 发布临时固件
+      if: steps.compile.outputs.status == 'success'
       uses: ncipollo/release-action@v1
       with:
-        name: R${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        name: R${{ steps.compile.outputs.DATE }} for ${{ env.FIRMWARE_TAG }}
         tag: ${{ env.FIRMWARE_TAG }}
-        # 👇 使用 token 并指定权限
         token: ${{ secrets.GITHUB_TOKEN }}
         allowUpdates: true
         artifacts: ${{ env.FIRMWARE_PATH }}/*
         body: |
           **ARMv8 Mini Firmware (Temporary)**
           ### 📒 固件信息
-          - 🚀 成品固件点击此处跳转➦[MINI](https://github.com/haiibo/OpenWrt/releases/tag/ARMv8_MINI)即可下载
-          - 💻 平台架构: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }} (精简版临时固件)
+          - 💻 平台架构: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
           - ⚽ 固件源码: ${{ env.REPO_URL }}
           - 💝 源码分支: ${{ env.REPO_BRANCH }}
           - 🌐 默认地址: 192.168.1.1
           - 🔑 默认密码: password
           ### 🧊 固件版本
-          ${{ env.COMMIT_AUTHOR }}
-          ${{ env.COMMIT_DATE }}
-          ${{ env.COMMIT_MESSAGE }}
-          ${{ env.COMMIT_HASH }}
+          ${{ steps.clone.outputs.COMMIT_AUTHOR }}
+          ${{ steps.clone.outputs.COMMIT_DATE }}
+          ${{ steps.clone.outputs.COMMIT_MESSAGE }}
+          ${{ steps.clone.outputs.COMMIT_HASH }}
 
   Package:
     needs: Build
     runs-on: ubuntu-22.04
-    if: env.OPENWRT_RELEASE == 'true' # 只有需要打包时才运行
-    env:
-      COMMIT_AUTHOR: ${{ needs.Build.outputs.COMMIT_AUTHOR }}
-      COMMIT_DATE: ${{ needs.Build.outputs.COMMIT_DATE }}
-      COMMIT_MESSAGE: ${{ needs.Build.outputs.COMMIT_MESSAGE }}
-      COMMIT_HASH: ${{ needs.Build.outputs.COMMIT_HASH }}
-      DEVICE_TARGET: ${{ needs.Build.outputs.DEVICE_TARGET }}
-      DEVICE_SUBTARGET: ${{ needs.Build.outputs.DEVICE_SUBTARGET }}
-
     steps:
-    - name: 🛠️ 初始化环境
-      run: |
-        sudo apt-get -y update
-        sudo apt-get -y install wget tar
-        sudo timedatectl set-timezone "$TZ"
+    - name: 🛒 检出代码 (Checkout)
+      uses: actions/checkout@v4
 
-    - name: 📥 下载固件
-      run: |
-        FIRMWARE_PATH=openwrt/bin/targets/armvirt/64
-        mkdir -p $FIRMWARE_PATH
-        cd $FIRMWARE_PATH
-        # 修复：直接下载指定 tag 的 rootfs
-        wget -q $(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$FIRMWARE_TAG" | grep '"browser_download_url"' | grep 'rootfs.tar.gz' | awk -F '"' '{print $4}' | head -1)
-        echo "DATE1=$(date +"%y.%m.%d")" >> $GITHUB_ENV
+    - name: 📥 下载 Rootfs (Artifact 传递)
+      uses: actions/download-artifact@v4
+      with:
+        name: openwrt-rootfs
+        path: openwrt/bin/targets/armvirt/64
 
-    - name: 📦 打包固件
+    - name: 📦 打包 OpenWrt 固件
       uses: ophub/flippy-openwrt-actions@main
       env:
-        OPENWRT_ARMVIRT: openwrt/bin/targets/*/*/*rootfs.tar.gz
+        OPENWRT_ARMVIRT: openwrt/bin/targets/armvirt/64/*rootfs.tar.gz
         PACKAGE_SOC: all
         WHOAMI: Haiibo
         KERNEL_VERSION_NAME: 5.15.13_6.1.5
         KERNEL_AUTO_LATEST: true
-        DISTRIB_REVISION: R${{ env.DATE1 }} by Haiibo
+        DISTRIB_REVISION: R${{ needs.Build.outputs.FILE_DATE }} by Haiibo
 
     - name: 🚀 发布增强版固件
       uses: ncipollo/release-action@v1
       with:
-        name: R${{ env.DATE }} for ${{ env.OPENWRT_TAG }}
+        name: R${{ needs.Build.outputs.DATE }} for ${{ env.OPENWRT_TAG }}
         tag: ${{ env.OPENWRT_TAG }}
         token: ${{ secrets.GITHUB_TOKEN }}
         allowUpdates: true
@@ -215,7 +204,7 @@ jobs:
           **OpenWrt Firmware for Armvirt 64 (Enhanced)**
           ### 📒 固件信息
           - 🚀 ARMv8 精简版，主打科学上网适合养老
-          - 💻 平台架构: ${{ env.DEVICE_TARGET }}-${{ env.DEVICE_SUBTARGET }}
+          - 💻 平台架构: ${{ needs.Build.outputs.DEVICE_TARGET }}-${{ needs.Build.outputs.DEVICE_SUBTARGET }}
           - ⚽ 固件源码: ${{ env.REPO_URL }}
           - 💝 源码分支: ${{ env.REPO_BRANCH }}
           - 🌐 默认地址: 192.168.1.1
@@ -225,10 +214,8 @@ jobs:
           - 用命令安装: U盘启动成功后输入命令 `openwrt-install-amlogic` 按照英文提示写入到 emmc
           - 用插件更新: 系统 → 晶晨宝盒 → 在线下载更新 → 完整更新全系统
           - 用命令更新: 上传固件到 `/mnt/mmcblk2p4` 目录，输入命令 `openwrt-update-amlogic` 即可更新
-          - 注意: 如非 `amlogic` 平台，请将其更改为对应平台 `rockchip` `allwinner`
-          - 部分常见问题及注意事项请参考恩山论坛F大➦[最新帖](https://www.right.com.cn/forum/thread-4076037-1-1.html)
           ### 🧊 固件版本
-          ${{ env.COMMIT_AUTHOR }}
-          ${{ env.COMMIT_DATE }}
-          ${{ env.COMMIT_MESSAGE }}
-          ${{ env.COMMIT_HASH }}
+          ${{ needs.Build.outputs.COMMIT_AUTHOR }}
+          ${{ needs.Build.outputs.COMMIT_DATE }}
+          ${{ needs.Build.outputs.COMMIT_MESSAGE }}
+          ${{ needs.Build.outputs.COMMIT_HASH }}
